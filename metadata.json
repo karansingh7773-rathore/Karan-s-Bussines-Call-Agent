@@ -1,0 +1,8 @@
+{
+  "name": "Copy of VAPI Clone - Business Voice Agent",
+  "description": "An intelligent AI voice agent for businesses capable of taking calls, scheduling appointments, and referencing uploaded business knowledge using Gemini's Live API and Thinking models.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
