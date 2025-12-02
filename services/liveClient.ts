@@ -19,6 +19,12 @@ export class LiveClient {
   private outputAudioContext: AudioContext | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
   private processor: ScriptProcessorNode | null = null;
+  
+  // Recording
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordingDestination: MediaStreamAudioDestinationNode | null = null;
+  private audioChunks: Blob[] = [];
+
   private nextStartTime: number = 0;
   private callbacks: LiveClientCallbacks;
   private config: AgentConfig;
@@ -33,6 +39,7 @@ export class LiveClient {
 
   public async connect() {
     this.callbacks.onStatusChange('connecting');
+    this.audioChunks = [];
 
     try {
       this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: PCM_SAMPLE_RATE });
@@ -40,7 +47,24 @@ export class LiveClient {
       
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // Define tools
+      // Setup Recording: Route Mic -> RecordingDest (in output context)
+      // We need to create a source for the mic in the output context to mix it for recording
+      // without playing it to destination (to avoid feedback).
+      if (this.outputAudioContext) {
+        this.recordingDestination = this.outputAudioContext.createMediaStreamDestination();
+        const micStreamForRecord = this.outputAudioContext.createMediaStreamSource(stream);
+        micStreamForRecord.connect(this.recordingDestination);
+        
+        this.mediaRecorder = new MediaRecorder(this.recordingDestination.stream);
+        this.mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            this.audioChunks.push(event.data);
+          }
+        };
+        this.mediaRecorder.start();
+      }
+
+      // Define tools including Google Search
       const tools: any[] = [
         { googleSearch: {} },
         { googleMaps: {} },
@@ -75,6 +99,10 @@ export class LiveClient {
         }
       ];
 
+      // Construct dynamic system instructions for voice settings
+      const speedDesc = this.config.speed < 1 ? "slow and steady" : this.config.speed > 1 ? "fast and energetic" : "natural";
+      const pitchDesc = this.config.pitch < 0 ? "deeper" : this.config.pitch > 0 ? "higher pitched" : "natural";
+
       this.sessionPromise = this.ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: {
@@ -84,6 +112,11 @@ export class LiveClient {
             
             System Instructions:
             ${this.config.systemPrompt}
+            
+            Speaking Style Instructions:
+            - Speed: ${speedDesc} (${this.config.speed}x pace)
+            - Tone: ${pitchDesc}
+            - Maintain this persona consistently.
 
             Business Knowledge Base:
             ${this.businessContext}
@@ -91,7 +124,7 @@ export class LiveClient {
             Behavior:
             - Keep responses concise and conversational.
             - Use a human-like tone.
-            - If you need to find information not in the knowledge base, use Google Search.
+            - If you need to find information not in the knowledge base, USE THE googleSearch tool.
             - If you need location info, use Google Maps.
             - If the user wants to book something, use scheduleAppointment.
             - Record important details using takeNote.
@@ -101,8 +134,8 @@ export class LiveClient {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: this.config.voiceName || 'Zephyr' } },
           },
           tools: tools,
-          inputAudioTranscription: {}, // Enable input transcription
-          outputAudioTranscription: {}, // Enable output transcription (optional, helpful for UI)
+          inputAudioTranscription: {}, 
+          outputAudioTranscription: {}, 
         },
         callbacks: {
           onopen: () => {
@@ -160,6 +193,11 @@ export class LiveClient {
   }
 
   private stopAudioStream() {
+    // Stop recording
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+        this.mediaRecorder.stop();
+    }
+
     if (this.processor) {
       this.processor.disconnect();
       this.processor = null;
@@ -176,6 +214,10 @@ export class LiveClient {
       this.outputAudioContext.close();
       this.outputAudioContext = null;
     }
+  }
+
+  public async getRecording(): Promise<Blob> {
+      return new Blob(this.audioChunks, { type: 'audio/webm' });
   }
 
   private async handleMessage(message: LiveServerMessage) {
@@ -231,7 +273,15 @@ export class LiveClient {
         
         const source = this.outputAudioContext.createBufferSource();
         source.buffer = audioBuffer;
+        
+        // Connect to Speakers
         source.connect(this.outputAudioContext.destination);
+        
+        // Connect to Recorder (if active)
+        if (this.recordingDestination) {
+            source.connect(this.recordingDestination);
+        }
+
         source.start(this.nextStartTime);
         
         this.nextStartTime += audioBuffer.duration;
@@ -239,15 +289,7 @@ export class LiveClient {
   }
 
   public disconnect() {
-    // No explicit disconnect method on session? Just stop streaming and close contexts.
-    // We can assume session closes when we stop sending or refresh.
-    // There isn't a direct `session.close()` exposed in the quickstart, 
-    // but we should clean up local resources.
-    // Actually, guidelines say: "When the conversation is finished, use `session.close()`"
-    // But `connect` returns a promise that resolves to the session.
     this.sessionPromise?.then(session => {
-        // session.close() might exist on the session object
-        // but typescript definitions might vary. We'll try.
         if (typeof (session as any).close === 'function') {
             (session as any).close();
         }

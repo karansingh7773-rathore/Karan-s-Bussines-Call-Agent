@@ -8,6 +8,8 @@ export interface AgentConfig {
   role: string;
   systemPrompt: string;
   voiceName: string; // 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr'
+  pitch: number; // -10 to 10, abstract scale
+  speed: number; // 0.5 to 2.0, multiplier
 }
 
 export interface CallLog {

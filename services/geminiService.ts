@@ -69,3 +69,25 @@ export async function searchWebGrounding(query: string): Promise<string> {
         return "Search unavailable.";
     }
 }
+
+export async function generateSessionSummary(
+  transcripts: { speaker: 'user' | 'agent'; text: string }[]
+): Promise<string> {
+  if (transcripts.length === 0) return "No conversation recorded.";
+
+  try {
+    const formattedTranscript = transcripts
+      .map(t => `${t.speaker.toUpperCase()}: ${t.text}`)
+      .join('\n');
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Summarize the following customer service call concisely. Identify the main user intent, any actions taken by the agent, and the final outcome.\n\nTranscript:\n${formattedTranscript}`,
+    });
+
+    return response.text || "Unable to generate summary.";
+  } catch (error) {
+    console.error("Summarization failed:", error);
+    return "Error generating summary.";
+  }
+}
